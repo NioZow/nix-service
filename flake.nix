@@ -40,14 +40,12 @@
 
     lib.version = import ./lib/version.nix;
 
-    # Optional convenience modules: importing this wires `mkService` into the
-    # module system as a module argument. It never declares options.
-    homeModules.default = import ./modules/default.nix;
-    nixosModules.default = import ./modules/default.nix;
-    darwinModules.default = import ./modules/default.nix;
-
-    # Copyable example service module (Option A).
+    # Copyable example service module (Option A). It imports the library
+    # directly, so importing it needs no `specialArgs` wiring. See the README
+    # for why a `_module.args`-based convenience module cannot work here.
     homeModules.example = import ./modules/example.nix;
+    nixosModules.example = import ./modules/example.nix;
+    darwinModules.example = import ./modules/example.nix;
 
     # Pure-eval test of the 4 platform x scope combinations. Forcing the
     # `builtins.toJSON` of the result evaluates every assertion at build time.
@@ -62,12 +60,13 @@
           };
       };
     in {
-      eval = pkgs.runCommand "nix-services-eval" {
-        evalResult = builtins.toJSON assertions;
-      } ''
-        test -n "$evalResult"
-        touch $out
-      '';
+      eval =
+        pkgs.runCommand "nix-services-eval" {
+          evalResult = builtins.toJSON assertions;
+        } ''
+          test -n "$evalResult"
+          touch $out
+        '';
     });
   };
 }

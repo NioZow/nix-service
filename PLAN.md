@@ -1,9 +1,26 @@
 # PLAN: `nix-services` — a cross-platform service-runner flake library
 
-> **Status:** planning complete, not yet implemented.
-> **Resume instruction for a fresh context:** implement this plan top-to-bottom. Start
-> with Phase 1, run the verification step at the end of each phase before moving on.
-> Everything needed is contained in this document — no prior conversation required.
+> **Status:** implemented (phases 1–5). Deviations from the original sketch,
+> discovered during implementation:
+>
+> 1. **Linux system units use a different schema.** NixOS'
+>    `systemd.services.<name>` takes `description`/`wantedBy`/`after`/`wants`/
+>    `unitConfig`/`serviceConfig` — not the raw `Unit`/`Service`/`Install` used
+>    by home-manager's `systemd.user.services`. `lib/service.nix` now emits the
+>    correct schema per scope, and a first-class `wants` parameter was added.
+> 2. **No `_module.args` convenience module.** A module argument used as
+>    top-level `config` content is forced at merge time while `_module.args` is
+>    part of `config`, so it always recurses. `specialArgs` is the supported
+>    mechanism; `modules/example.nix` uses it and documents it. `modules/default.nix`
+>    was removed.
+> 3. **Unused `home-manager` flake input removed** (it was never referenced and
+>    would force every consumer to fetch it).
+> 4. **First consumer** (`chutes-litellm-proxy`) binds `mkService` with a
+>    constant `isDarwin = false` because its distributed module is NixOS-only and
+>    binding it from `pkgs` would recurse.
+>
+> **Resume instruction for a fresh context:** the work is complete; re-run the
+> verification below if resuming.
 
 ---
 

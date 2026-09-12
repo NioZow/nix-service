@@ -1,12 +1,29 @@
-# Copy-paste example service module. Import alongside one of the convenience
-# modules (which provides the `mkService` module argument):
+# Copy-paste example service module.
 #
-#   imports = [
-#     inputs.nix-services.nixosModules.default
-#     inputs.nix-services.homeModules.example
-#   ];
+# `mkService` is a *module argument* (a `specialArgs` entry), so this module is
+# portable across home-manager, NixOS and nix-darwin. Wire it in your flake:
 #
-# The same module works in a home-manager, NixOS or nix-darwin configuration.
+#   # flake.nix (per system)
+#   let
+#     lib = nixpkgs.lib;
+#     pkgs = import nixpkgs { inherit system; };
+#     mkService = inputs.nix-services.lib.mkService {
+#       inherit lib;
+#       isDarwin = pkgs.stdenv.isDarwin;
+#       username = "youruser";       # macOS user-scope log paths only
+#     };
+#   in {
+#     nixosConfigurations.host = nixpkgs.lib.nixosSystem {
+#       inherit system;
+#       specialArgs = { inherit mkService; };
+#       modules = [ inputs.nix-services.nixosModules.example ];
+#     };
+#   }
+#
+# Why `specialArgs` and not an imported `_module.args` module? `mkService` is
+# used as top-level `config` content and is therefore forced during module
+# merge. If its value depended on module args such as `pkgs` or `config`, that
+# would recurse. Binding it outside the module system (specialArgs) avoids this.
 {
   lib,
   pkgs,

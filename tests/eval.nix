@@ -1,4 +1,7 @@
-{lib, mkServiceFor}: let
+{
+  lib,
+  mkServiceFor,
+}: let
   # Build a service for the given platform (isDarwin) and scope.
   mk = isDarwin: scope:
     (mkServiceFor isDarwin) {
@@ -34,6 +37,23 @@
     wantedBy = ["graphical-session.target"];
   };
 
+  # `wants` must map to the NixOS top-level option and the HM Unit.Wants field.
+  linuxSystemWithWants = (mkServiceFor false) {
+    name = "demo";
+    description = "Demo service";
+    command = "/bin/true";
+    scope = "system";
+    wants = ["network-online.target"];
+  };
+
+  linuxUserWithWants = (mkServiceFor false) {
+    name = "demo";
+    description = "Demo service";
+    command = "/bin/true";
+    scope = "user";
+    wants = ["network-online.target"];
+  };
+
   checks = {
     linux-user-path = linuxUser ? systemd.user.services.demo;
     linux-user-not-system = !(linuxUser ? systemd.services);
@@ -41,9 +61,16 @@
 
     linux-system-path = linuxSystem ? systemd.services.demo;
     linux-system-not-user = !(linuxSystem ? systemd.user);
-    linux-system-default-target = linuxSystem.systemd.services.demo.Install.WantedBy == ["multi-user.target"];
+    linux-system-default-target = linuxSystem.systemd.services.demo.wantedBy == ["multi-user.target"];
+    linux-system-nixos-schema =
+      linuxSystem.systemd.services.demo ? serviceConfig
+      && linuxSystem.systemd.services.demo.serviceConfig.ExecStart == "/bin/true"
+      && linuxSystem.systemd.services.demo.description == "Demo service";
+    linux-system-no-raw-install = !(linuxSystem.systemd.services.demo ? Install);
 
     linux-wantedby-override = linuxUserForcedTarget.systemd.user.services.demo.Install.WantedBy == ["graphical-session.target"];
+    linux-system-wants = linuxSystemWithWants.systemd.services.demo.wants == ["network-online.target"];
+    linux-user-wants = linuxUserWithWants.systemd.user.services.demo.Unit.Wants == ["network-online.target"];
 
     darwin-user-path = darwinUser ? launchd.agents.demo;
     darwin-user-not-daemons = !(darwinUser ? launchd.daemons);
@@ -57,7 +84,8 @@
 
     darwin-schema-override = darwinUserForcedSystem.launchd.agents.demo ? serviceConfig;
 
-    launchd-path-merged = darwinUser.launchd.agents.demo.config.EnvironmentVariables.PATH
+    launchd-path-merged =
+      darwinUser.launchd.agents.demo.config.EnvironmentVariables.PATH
       == "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin";
   };
 

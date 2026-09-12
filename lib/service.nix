@@ -50,6 +50,7 @@
   # Linux-only params (silently ignored on Darwin):
   after ? [],
   partOf ? [],
+  wants ? [],
   # Install.WantedBy. When null it is derived from `scope`:
   #   system -> [systemdSystemTarget] (multi-user.target)
   #   user   -> ["default.target"]
@@ -115,31 +116,59 @@
     }
     // extraLaunchdConfig;
 
-  systemdUnit = {
-    Unit =
-      {Description = description;}
-      // lib.optionalAttrs (after != []) {After = after;}
-      // lib.optionalAttrs (partOf != []) {PartOf = partOf;}
-      // extraSystemdUnitConfig;
-    Service =
-      {
-        Type = "simple";
-        ExecStart = command;
-        Restart = restart;
-        RestartSec = restartSec;
-        Environment = envList;
-      }
-      // extraSystemdServiceConfig;
+  # Service directives are shared between the two Linux schemas.
+  systemdServiceSection =
+    {
+      Type = "simple";
+      ExecStart = command;
+      Restart = restart;
+      RestartSec = restartSec;
+      Environment = envList;
+    }
+    // extraSystemdServiceConfig;
+
+  systemdUnitSection =
+    {Description = description;}
+    // lib.optionalAttrs (after != []) {After = after;}
+    // lib.optionalAttrs (partOf != []) {PartOf = partOf;}
+    // lib.optionalAttrs (wants != []) {Wants = wants;}
+    // extraSystemdUnitConfig;
+
+  # home-manager's `systemd.user.services` uses the raw systemd unit-file
+  # schema: { Unit; Service; Install.WantedBy; }.
+  homeManagerUnit = {
+    Unit = systemdUnitSection;
+    Service = systemdServiceSection;
     Install.WantedBy = resolvedWantedBy;
   };
+
+  # NixOS's `systemd.services` uses nixpkgs' option schema:
+  # { description; wantedBy; after; partOf; unitConfig; serviceConfig; }.
+  # There is no `Install`/`Unit`/`Service` here.
+  nixosUnit =
+    {
+      inherit description;
+      wantedBy = resolvedWantedBy;
+      unitConfig = extraSystemdUnitConfig;
+      serviceConfig = systemdServiceSection;
+    }
+    // lib.optionalAttrs (after != []) {after = after;}
+    // lib.optionalAttrs (partOf != []) {partOf = partOf;}
+    // lib.optionalAttrs (wants != []) {inherit wants;};
 in
   lib.optionalAttrs isLinux (
     if systemScope
-    then {systemd.services.${name} = systemdUnit;}
-    else {systemd.user.services.${name} = systemdUnit;}
+    then {systemd.services.${name} = nixosUnit;}
+    else {systemd.user.services.${name} = homeManagerUnit;}
   )
   // lib.optionalAttrs isDarwin {
-    launchd.${if systemScope then "daemons" else "agents"}.${name} =
+    launchd.${
+      if systemScope
+      then "daemons"
+      else "agents"
+    }.${
+      name
+    } =
       if nixDarwinLaunchd
       then {serviceConfig = launchdConfig;}
       else {
