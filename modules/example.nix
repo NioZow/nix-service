@@ -24,6 +24,12 @@
 # used as top-level `config` content and is therefore forced during module
 # merge. If its value depended on module args such as `pkgs` or `config`, that
 # would recurse. Binding it outside the module system (specialArgs) avoids this.
+#
+# NOTE: `name` and `scope` below are literals on purpose. They determine the
+# *shape* of the returned fragment (`systemd.services.<name>` vs
+# `launchd.agents.<name>`), which the module system forces during merge, so they
+# must not be read from `config`. Values inside the fragment (e.g. `command`,
+# `environment`) may read `config` freely.
 {
   lib,
   pkgs,
@@ -41,12 +47,6 @@ in {
       default = 8080;
       description = "Port the example service listens on.";
     };
-
-    scope = lib.mkOption {
-      type = lib.types.enum ["user" "system"];
-      default = "user";
-      description = "Run as a user agent/service or as a root daemon/service.";
-    };
   };
 
   config = lib.mkIf cfg.enable (mkService {
@@ -54,6 +54,6 @@ in {
     description = "Hello service";
     command = "${pkgs.hello}/bin/hello";
     environment = {PORT = toString cfg.port;};
-    inherit (cfg) scope;
+    scope = "user"; # change to "system" for a root service/daemon
   });
 }

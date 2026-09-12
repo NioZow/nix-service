@@ -147,8 +147,15 @@ specialArgs = { inherit mkService; };
 modules = [inputs.nix-services.nixosModules.example];
 ```
 
-It declares `custom.services.hello` with `enable`, `port` and `scope` options;
-copy it and rename.
+It declares `custom.services.hello` with `enable` and `port` options; copy it and
+rename.
+
+> **Structural args must be literals.** `name` and `scope` determine the *shape*
+> of the returned fragment (`systemd.services.<name>` vs
+> `launchd.agents.<name>`) and are forced during module merge, so they cannot be
+> read from `config`. Values *inside* the fragment (`command`, `environment`,
+> `after`, …) may read `config` freely. This is why the example hardcodes
+> `scope = "user"`.
 
 ## Overriding launchd behaviour
 
