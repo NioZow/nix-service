@@ -26,15 +26,29 @@
 # consuming flake's `lib.mkService`) so callers only pass service-specific
 # parameters.
 #
-# Platform / scope mapping:
-#   scope = "user"   -> Linux: systemd.user.services.<name>
-#                       macOS: launchd.agents.<name>        (home-manager schema)
-#   scope = "system" -> Linux: systemd.services.<name>       (root)
-#                       macOS: launchd.daemons.<name>       (nix-darwin schema)
+# Platform / module-system / scope mapping. The `homeManager` factory flag
+# selects the *module system* that will consume the fragment, which is what
+# decides the unit schema (NixOS/nix-darwin vs home-manager):
+#
+#   Linux, scope="system"                         -> systemd.services.<name>            (nixpkgs schema, root)
+#   Linux, scope="user", homeManager=false        -> systemd.user.services.<name>       (nixpkgs schema)
+#   Linux, scope="user", homeManager=true         -> systemd.user.services.<name>       (raw unit schema)
+#   macOS, scope="system"                         -> launchd.daemons.<name>.serviceConfig  (nix-darwin)
+#   macOS, scope="user", homeManager=false        -> launchd.agents.<name>.serviceConfig   (nix-darwin)
+#   macOS, scope="user", homeManager=true         -> launchd.agents.<name>.{enable,config} (home-manager)
+#
+# NixOS's `systemd.user.services` and home-manager's `systemd.user.services`
+# share a name but *not* a schema; `homeManager` is therefore required when
+# targeting user scope. home-manager only supports user scope.
 {
   lib,
   isDarwin,
   username,
+  # True when the fragment is consumed by a home-manager module. Selects the
+  # home-manager schema for `systemd.user.services` / `launchd.agents` and
+  # coerces `scope = "system"` to user scope (home-manager has no system-wide
+  # units), so shared definitions work unchanged.
+  homeManager ? false,
   # Install.WantedBy target used for system-scope Linux units.
   systemdSystemTarget ? "multi-user.target",
 }: {
@@ -57,12 +71,9 @@
   wantedBy ? null,
   extraSystemdServiceConfig ? {},
   extraSystemdUnitConfig ? {},
-  # The launchd agent schema differs between nix-darwin system modules and
-  # home-manager modules even though both expose `launchd.<class>`:
+  # launchd schema is chosen by `homeManager` (see the factory args):
   #   home-manager -> config        (Label/ProgramArguments/...)
   #   nix-darwin   -> serviceConfig (Label/ProgramArguments/...)
-  # Defaults from `scope`: system -> true (nix-darwin), user -> false (HM).
-  nixDarwinLaunchd ? (scope == "system"),
   # launchd log location. Defaults to /var/log for system daemons and
   # ~/Library/Logs for user agents.
   logDir ? null,
@@ -76,7 +87,11 @@
   # nixcfg/lib/common.nix or `pkgs.stdenv.isDarwin` in a consumer), avoiding a
   # `system` string match here.
   isLinux = !isDarwin;
-  systemScope = scope == "system";
+  # home-manager only manages per-user units, so a requested `scope = "system"`
+  # is coerced to user scope when `homeManager = true` instead of erroring. This
+  # lets one service definition be shared between system and home-manager
+  # modules without special-casing the scope per consumer.
+  systemScope = scope == "system" && !homeManager;
 
   resolvedWantedBy =
     if wantedBy != null
@@ -142,8 +157,8 @@
     Install.WantedBy = resolvedWantedBy;
   };
 
-  # NixOS's `systemd.services` uses nixpkgs' option schema:
-  # { description; wantedBy; after; partOf; unitConfig; serviceConfig; }.
+  # NixOS's `systemd.services` and `systemd.user.services` use nixpkgs' option
+  # schema: { description; wantedBy; after; partOf; unitConfig; serviceConfig; }.
   # There is no `Install`/`Unit`/`Service` here.
   nixosUnit =
     {
@@ -159,7 +174,9 @@ in
   lib.optionalAttrs isLinux (
     if systemScope
     then {systemd.services.${name} = nixosUnit;}
-    else {systemd.user.services.${name} = homeManagerUnit;}
+    else if homeManager
+    then {systemd.user.services.${name} = homeManagerUnit;}
+    else {systemd.user.services.${name} = nixosUnit;}
   )
   // lib.optionalAttrs isDarwin {
     launchd.${
@@ -169,10 +186,10 @@ in
     }.${
       name
     } =
-      if nixDarwinLaunchd
-      then {serviceConfig = launchdConfig;}
-      else {
+      if homeManager
+      then {
         enable = true;
         config = launchdConfig;
-      };
+      }
+      else {serviceConfig = launchdConfig;};
   }

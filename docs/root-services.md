@@ -26,8 +26,8 @@ systemd.services.<name> = {
 ```
 
 Note this is **not** the raw `Unit`/`Service`/`Install` schema used by
-home-manager's `systemd.user.services`; `mkService` picks the right one based on
-`scope`.
+home-manager's `systemd.user.services`; `mkService` picks the right schema from
+the factory's `homeManager` flag and the `scope`.
 
 ### Hardening
 

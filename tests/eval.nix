@@ -2,91 +2,146 @@
   lib,
   mkServiceFor,
 }: let
-  # Build a service for the given platform (isDarwin) and scope.
-  mk = isDarwin: scope:
-    (mkServiceFor isDarwin) {
-      name = "demo";
-      description = "Demo service";
-      command = "/bin/true";
-      inherit scope;
-    };
+  # Build a service for a given module system (`isDarwin` / `homeManager`) and
+  # scope, forwarding any extra `mkService` arguments from `args`.
+  mk = args @ {
+    isDarwin,
+    homeManager ? false,
+    ...
+  }:
+    (mkServiceFor {inherit isDarwin homeManager;}) (
+      {
+        name = "demo";
+        description = "Demo service";
+        command = "/bin/true";
+      }
+      // lib.removeAttrs args ["isDarwin" "homeManager"]
+    );
 
-  linux = isDarwin: mk isDarwin;
-  darwin = mk true;
-
-  linuxUser = linux false "user";
-  linuxSystem = linux false "system";
-  darwinUser = darwin "user";
-  darwinSystem = darwin "system";
-
-  # Explicit schema override must win over the scope-derived default.
-  darwinUserForcedSystem = (mkServiceFor true) {
-    name = "demo";
-    description = "Demo service";
-    command = "/bin/true";
+  # Linux, NixOS (system module system).
+  nixosUser = mk {
+    isDarwin = false;
     scope = "user";
-    nixDarwinLaunchd = true;
   };
-
-  # Explicit wantedBy override must win.
-  linuxUserForcedTarget = (mkServiceFor false) {
-    name = "demo";
-    description = "Demo service";
-    command = "/bin/true";
+  nixosSystem = mk {
+    isDarwin = false;
+    scope = "system";
+  };
+  nixosUserWants = mk {
+    isDarwin = false;
+    scope = "user";
+    wants = ["network-online.target"];
+  };
+  nixosUserForcedTarget = mk {
+    isDarwin = false;
     scope = "user";
     wantedBy = ["graphical-session.target"];
   };
-
-  # `wants` must map to the NixOS top-level option and the HM Unit.Wants field.
-  linuxSystemWithWants = (mkServiceFor false) {
-    name = "demo";
-    description = "Demo service";
-    command = "/bin/true";
+  nixosSystemWants = mk {
+    isDarwin = false;
     scope = "system";
     wants = ["network-online.target"];
   };
 
-  linuxUserWithWants = (mkServiceFor false) {
-    name = "demo";
-    description = "Demo service";
-    command = "/bin/true";
+  # Linux, home-manager.
+  hmLinuxUser = mk {
+    isDarwin = false;
+    homeManager = true;
     scope = "user";
-    wants = ["network-online.target"];
+  };
+
+  # macOS, nix-darwin.
+  darwinUser = mk {
+    isDarwin = true;
+    scope = "user";
+  };
+  darwinSystem = mk {
+    isDarwin = true;
+    scope = "system";
+  };
+
+  # macOS, home-manager.
+  hmDarwinUser = mk {
+    isDarwin = true;
+    homeManager = true;
+    scope = "user";
   };
 
   checks = {
-    linux-user-path = linuxUser ? systemd.user.services.demo;
-    linux-user-not-system = !(linuxUser ? systemd.services);
-    linux-user-default-target = linuxUser.systemd.user.services.demo.Install.WantedBy == ["default.target"];
+    # ---- Linux / NixOS user: nixpkgs option schema -----------------------
+    nixos-user-path = nixosUser ? systemd.user.services.demo;
+    nixos-user-not-system = !(nixosUser ? systemd.services);
+    nixos-user-nixos-schema =
+      nixosUser.systemd.user.services.demo ? serviceConfig
+      && nixosUser.systemd.user.services.demo.serviceConfig.ExecStart == "/bin/true"
+      && nixosUser.systemd.user.services.demo.description == "Demo service";
+    nixos-user-no-raw-schema = !(nixosUser.systemd.user.services.demo ? Unit);
+    nixos-user-default-target = nixosUser.systemd.user.services.demo.wantedBy == ["default.target"];
+    nixos-user-wants = nixosUserWants.systemd.user.services.demo.wants == ["network-online.target"];
+    nixos-user-wantedby-override =
+      nixosUserForcedTarget.systemd.user.services.demo.wantedBy == ["graphical-session.target"];
 
-    linux-system-path = linuxSystem ? systemd.services.demo;
-    linux-system-not-user = !(linuxSystem ? systemd.user);
-    linux-system-default-target = linuxSystem.systemd.services.demo.wantedBy == ["multi-user.target"];
-    linux-system-nixos-schema =
-      linuxSystem.systemd.services.demo ? serviceConfig
-      && linuxSystem.systemd.services.demo.serviceConfig.ExecStart == "/bin/true"
-      && linuxSystem.systemd.services.demo.description == "Demo service";
-    linux-system-no-raw-install = !(linuxSystem.systemd.services.demo ? Install);
+    # ---- Linux / NixOS system: nixpkgs option schema ---------------------
+    nixos-system-path = nixosSystem ? systemd.services.demo;
+    nixos-system-not-user = !(nixosSystem ? systemd.user);
+    nixos-system-default-target = nixosSystem.systemd.services.demo.wantedBy == ["multi-user.target"];
+    nixos-system-nixos-schema =
+      nixosSystem.systemd.services.demo.serviceConfig.ExecStart
+      == "/bin/true"
+      && nixosSystem.systemd.services.demo.description == "Demo service";
+    nixos-system-wants = nixosSystemWants.systemd.services.demo.wants == ["network-online.target"];
 
-    linux-wantedby-override = linuxUserForcedTarget.systemd.user.services.demo.Install.WantedBy == ["graphical-session.target"];
-    linux-system-wants = linuxSystemWithWants.systemd.services.demo.wants == ["network-online.target"];
-    linux-user-wants = linuxUserWithWants.systemd.user.services.demo.Unit.Wants == ["network-online.target"];
+    # ---- Linux / home-manager user: raw systemd unit schema --------------
+    hm-linux-user-path = hmLinuxUser ? systemd.user.services.demo;
+    hm-linux-user-raw-schema =
+      hmLinuxUser.systemd.user.services.demo ? Unit
+      && hmLinuxUser.systemd.user.services.demo.Service.ExecStart == "/bin/true"
+      && hmLinuxUser.systemd.user.services.demo.Unit.Description == "Demo service"
+      && hmLinuxUser.systemd.user.services.demo.Install.WantedBy == ["default.target"];
+    hm-linux-user-no-nixos-schema = !(hmLinuxUser.systemd.user.services.demo ? serviceConfig);
 
+    # ---- macOS / nix-darwin: `serviceConfig` ----------------------------
     darwin-user-path = darwinUser ? launchd.agents.demo;
     darwin-user-not-daemons = !(darwinUser ? launchd.daemons);
-    darwin-user-home-manager-schema = darwinUser.launchd.agents.demo ? config;
-    darwin-user-launchd-no-nulls = lib.all (v: v != null) (lib.attrValues darwinUser.launchd.agents.demo.config);
-
+    darwin-user-nix-darwin-schema = darwinUser.launchd.agents.demo ? serviceConfig;
+    darwin-user-launchd-no-nulls = lib.all (v: v != null) (lib.attrValues darwinUser.launchd.agents.demo.serviceConfig);
     darwin-system-path = darwinSystem ? launchd.daemons.demo;
     darwin-system-not-agents = !(darwinSystem ? launchd.agents);
     darwin-system-nix-darwin-schema = darwinSystem.launchd.daemons.demo ? serviceConfig;
     darwin-system-launchd-no-nulls = lib.all (v: v != null) (lib.attrValues darwinSystem.launchd.daemons.demo.serviceConfig);
 
-    darwin-schema-override = darwinUserForcedSystem.launchd.agents.demo ? serviceConfig;
+    # ---- macOS / home-manager: `{ enable; config; }` ---------------------
+    hm-darwin-user-path = hmDarwinUser ? launchd.agents.demo;
+    hm-darwin-user-hm-schema = hmDarwinUser.launchd.agents.demo ? config;
+    hm-darwin-user-enabled = hmDarwinUser.launchd.agents.demo.enable == true;
+    hm-darwin-user-launchd-no-nulls = lib.all (v: v != null) (lib.attrValues hmDarwinUser.launchd.agents.demo.config);
 
     launchd-path-merged =
-      darwinUser.launchd.agents.demo.config.EnvironmentVariables.PATH
+      hmDarwinUser.launchd.agents.demo.config.EnvironmentVariables.PATH
       == "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin";
+
+    # ---- home-manager + system scope is coerced to user scope -----------
+    hm-linux-system-coerced = let
+      r = mk {
+        isDarwin = false;
+        homeManager = true;
+        scope = "system";
+      };
+    in
+      r ? systemd.user.services.demo
+      && !(r ? systemd.services)
+      && r.systemd.user.services.demo ? Unit
+      && r.systemd.user.services.demo.Install.WantedBy == ["default.target"];
+    hm-darwin-system-coerced = let
+      r = mk {
+        isDarwin = true;
+        homeManager = true;
+        scope = "system";
+      };
+    in
+      r ? launchd.agents.demo
+      && !(r ? launchd.daemons)
+      && r.launchd.agents.demo ? config;
   };
 
   failed = lib.attrNames (lib.filterAttrs (_: ok: !ok) checks);

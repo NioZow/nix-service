@@ -55,6 +55,7 @@ plain values, not module arguments) and inject it into every configuration.
           lib = nixpkgs.lib;
           isDarwin = true;
           username = "noah";
+          homeManager = true; # required for user-scope home-manager units
         };
       };
       modules = [./home];
@@ -125,6 +126,7 @@ outputs = {self, nixpkgs, nix-services}: {
         inherit lib;
         isDarwin = false;  # this module is NixOS-only
         username = "root"; # unused at system scope
+        homeManager = false; # NixOS schema (needed for scope = "user")
       }))
     ];
   };
@@ -132,8 +134,8 @@ outputs = {self, nixpkgs, nix-services}: {
 ```
 
 `lib` is provided by nixpkgs and is safe to use at merge time. **Do not** derive
-`isDarwin` or `username` from `pkgs`/`config` here: that forces `pkgs` (a module
-argument) during merge and recurses. This is the pattern used by
+`isDarwin`, `homeManager` or `username` from `pkgs`/`config` here: that forces
+`pkgs` (a module argument) during merge and recurses. This is the pattern used by
 `chutes-litellm-proxy`.
 
 ## (c) The copyable example module

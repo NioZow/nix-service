@@ -24,6 +24,7 @@
     #   mkService = inputs.nix-services.lib.mkService {
     #     inherit lib username;
     #     isDarwin = pkgs.stdenv.isDarwin;
+    #     homeManager = true;   # only when the fragment feeds a home-manager module
     #   };
     #   ...
     #   config = lib.mkIf cfg.enable (mkService { name = "app"; ... });
@@ -32,10 +33,11 @@
       lib,
       isDarwin,
       username,
+      homeManager ? false,
       systemdSystemTarget ? "multi-user.target",
     }:
       import ./lib/service.nix {
-        inherit lib isDarwin username systemdSystemTarget;
+        inherit lib isDarwin username homeManager systemdSystemTarget;
       };
 
     lib.version = import ./lib/version.nix;
@@ -47,15 +49,19 @@
     nixosModules.example = import ./modules/example.nix;
     darwinModules.example = import ./modules/example.nix;
 
-    # Pure-eval test of the 4 platform x scope combinations. Forcing the
-    # `builtins.toJSON` of the result evaluates every assertion at build time.
+    # Pure-eval test of every platform x module-system x scope combination.
+    # Forcing the `builtins.toJSON` of the result evaluates every assertion at
+    # build time.
     checks = forAllSystems (system: let
       pkgs = import nixpkgs {inherit system;};
       assertions = import ./tests/eval.nix {
         inherit lib;
-        mkServiceFor = isDarwin:
+        mkServiceFor = {
+          isDarwin,
+          homeManager ? false,
+        }:
           self.lib.mkService {
-            inherit lib isDarwin;
+            inherit lib isDarwin homeManager;
             username = "tester";
           };
       };

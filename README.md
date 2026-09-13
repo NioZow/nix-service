@@ -4,13 +4,18 @@ Cross-platform service runner for Nix flakes: one `mkService` call yields a
 working **systemd** unit on Linux or a **launchd** agent/daemon on macOS, at
 **user** or **root/system** scope.
 
-- Linux + user → `systemd.user.services.<name>` (home-manager)
-- Linux + system → `systemd.services.<name>` (NixOS / nix-darwin)
-- macOS + user → `launchd.agents.<name>` (home-manager schema)
-- macOS + system → `launchd.daemons.<name>` (nix-darwin `serviceConfig` schema)
+- Linux + system → `systemd.services.<name>` (NixOS, root)
+- Linux + user, home-manager → `systemd.user.services.<name>` (raw `Unit`/`Service`/`Install`)
+- Linux + user, NixOS → `systemd.user.services.<name>` (nixpkgs `serviceConfig` schema)
+- macOS + system → `launchd.daemons.<name>` (nix-darwin `serviceConfig`)
+- macOS + user, nix-darwin → `launchd.agents.<name>` (`serviceConfig`)
+- macOS + user, home-manager → `launchd.agents.<name>.{enable,config}`
 
-The library is pure (no impure builtins) and only needs `lib`, `isDarwin` and
-`username` to be bound by the consumer.
+NixOS' and home-manager's `systemd.user.services` share a name but **not** a
+schema (and the same is true of `launchd.agents`), so user-scope consumers must
+also set `homeManager = true|false` on the factory. The library is pure (no
+impure builtins) and only needs `lib`, `isDarwin`, `username` (and `homeManager`
+for user scope) to be bound by the consumer.
 
 ## Install
 
@@ -37,6 +42,7 @@ let
     inherit lib;
     isDarwin = pkgs.stdenv.isDarwin;
     username = "youruser"; # only used for macOS user-scope log paths
+    homeManager = true; # set for user-scope home-manager modules (see matrix)
   };
 in {
   nixosConfigurations.host = nixpkgs.lib.nixosSystem {
@@ -81,27 +87,34 @@ in {
 > arguments such as `pkgs` or `config`, evaluation would recurse. Binding it
 > outside the module system sidesteps that entirely.
 
-## Platform / scope matrix
+## Platform / module-system / scope matrix
 
-| `scope` | Linux (NixOS / home-manager) | macOS (nix-darwin / home-manager) | default `wantedBy` |
+| `scope` | module system | Linux | macOS |
 | --- | --- | --- | --- |
-| `user` | `systemd.user.services.<name>` (raw `Unit`/`Service`/`Install`) | `launchd.agents.<name>` (`config`) | `default.target` |
-| `system` | `systemd.services.<name>` (`description`/`wantedBy`/`serviceConfig`) | `launchd.daemons.<name>` (`serviceConfig`) | `multi-user.target` |
+| `system` | NixOS / nix-darwin | `systemd.services.<name>` (`description`/`wantedBy`/`serviceConfig`) | `launchd.daemons.<name>.serviceConfig` |
+| `user` | NixOS (or nix-darwin) | `systemd.user.services.<name>` (`description`/`wantedBy`/`serviceConfig`) | `launchd.agents.<name>.serviceConfig` |
+| `user` | home-manager | `systemd.user.services.<name>` (raw `Unit`/`Service`/`Install`) | `launchd.agents.<name>.{enable,config}` |
 
-The two Linux schemas differ:
+`user` scope defaults `wantedBy` to `default.target`; `system` scope to
+`multi-user.target`.
+
+The two user schemas differ:
 
 - home-manager's `systemd.user.services` uses the raw systemd unit-file schema
   (`Unit`, `Service`, `Install`).
-- NixOS' `systemd.services` uses nixpkgs' option schema (`description`,
-  `wantedBy`, `after`, `wants`, `serviceConfig`, `unitConfig`, …).
+- NixOS' `systemd.user.services` (and `systemd.services`) uses nixpkgs' option
+  schema (`description`, `wantedBy`, `after`, `wants`, `serviceConfig`,
+  `unitConfig`, …).
 
-`mkService` emits the correct one automatically. The launchd schemas differ too:
-home-manager takes `config`, nix-darwin takes `serviceConfig`; that choice is
-derived from `scope` and can be overridden with `nixDarwinLaunchd`.
+`mkService` picks the right one from the factory's `homeManager` flag (and
+nix-darwin vs home-manager for `launchd`). home-manager only manages per-user
+units, so with `homeManager = true` a requested `scope = "system"` is **coerced
+to user scope** rather than erroring — a shared service definition works
+unchanged in both system and home-manager modules.
 
 ## API
 
-`mkService = inputs.nix-services.lib.mkService { lib, isDarwin, username, systemdSystemTarget ? "multi-user.target" }`
+`mkService = inputs.nix-services.lib.mkService { lib, isDarwin, username, homeManager ? false, systemdSystemTarget ? "multi-user.target" }`
 
 The returned function:
 
@@ -121,7 +134,6 @@ The returned function:
 | `wantedBy` | [str] | scope-dependent | systemd | `multi-user.target` for system, `default.target` for user |
 | `extraSystemdServiceConfig` | attrs | `{}` | systemd | merged into `Service` / `serviceConfig` |
 | `extraSystemdUnitConfig` | attrs | `{}` | systemd | merged into `Unit` / `unitConfig` (use capitalized directives) |
-| `nixDarwinLaunchd` | bool | `scope == "system"` | launchd | `true` → `serviceConfig` (nix-darwin), `false` → `config` (home-manager) |
 | `logDir` | str \| null | scope-derived | launchd | `/var/log` for system, `~/Library/Logs` for user |
 | `stdoutPath` | str \| null | derived | launchd | overrides `StandardOutPath` |
 | `stderrPath` | str \| null | derived | launchd | overrides `StandardErrorPath` |
@@ -166,9 +178,17 @@ On macOS a system service becomes a root `launchd.daemons` entry using the
 nix-darwin `serviceConfig` schema, and logs default to `/var/log`. See
 [`docs/root-services.md`](docs/root-services.md).
 
-Use `scope = "user"` (default) for per-user daemons: a `systemd --user` service
-via home-manager, or a `launchd.agents` entry. These start with the user session
-and never require root.
+Use `scope = "user"` (default) for per-user daemons. There are two flavours:
+
+- **home-manager** (`homeManager = true`) — the consumer declares the unit in
+  their own home-manager config and enables it with `home-manager switch`, no
+  root required.
+- **NixOS** (`homeManager = false`) — declared system-wide in
+  `systemd.user.services`; activating it needs a `nixos-rebuild` (root), and the
+  unit is visible to *every* user's user manager. Use it when the host is
+  managed declaratively but the service should still run unprivileged.
+
+Both start with the user session and never run as root.
 
 ## Consumption recipes
 
@@ -180,31 +200,36 @@ See [`docs/usage.md`](docs/usage.md) for:
 
 ## Examples
 
-Minimal service in all four combinations:
+The same `mkService { … }` call, consumed by each module system:
 
 ```nix
-# Linux, user (home-manager)
-{
-  systemd.user.services.demo = { Unit.Description = "Demo"; /* ... */ };
-}
-
-# Linux, system (NixOS)
+# Linux, system (NixOS, root)
 {
   systemd.services.demo = {description = "Demo"; wantedBy = ["multi-user.target"]; /* ... */};
+}
+
+# Linux, user (NixOS -> systemd --user, nixpkgs schema)
+{
+  systemd.user.services.demo = {description = "Demo"; wantedBy = ["default.target"]; /* ... */};
+}
+
+# Linux, user (home-manager -> raw unit schema)
+{
+  systemd.user.services.demo = {Unit.Description = "Demo"; /* ... */};
+}
+
+# macOS, user (nix-darwin)
+{
+  launchd.agents.demo = {serviceConfig = {/* ... */};};
 }
 
 # macOS, user (home-manager)
 {
   launchd.agents.demo = {enable = true; config = {/* ... */};};
 }
-
-# macOS, system (nix-darwin)
-{
-  launchd.daemons.demo = {serviceConfig = {/* ... */};};
-}
 ```
 
-All four are produced by:
+all produced by:
 
 ```nix
 mkService {
@@ -215,7 +240,8 @@ mkService {
 }
 ```
 
-with `isDarwin` set appropriately.
+with `isDarwin` / `homeManager` set appropriately. With `homeManager = true`,
+`scope = "system"` is coerced to user scope.
 
 ## How to test / develop
 
@@ -224,8 +250,9 @@ nix flake check          # builds the pure-eval matrix check
 nix eval --json .#checks.aarch64-darwin.eval.evalResult | jq
 ```
 
-`tests/eval.nix` evaluates `mkService` for Linux/Darwin × user/system and
-asserts the expected attribute paths and defaults.
+`tests/eval.nix` evaluates `mkService` across Linux/macOS × NixOS/nix-darwin ×
+home-manager × user/system and asserts the expected attribute paths, schemas and
+defaults.
 
 To hack on it from a consumer without publishing, point the input at a local
 checkout:
